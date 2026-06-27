@@ -4,7 +4,7 @@ services:
     container_name: dashboard
     restart: unless-stopped
     environment:
-      API_UPSTREAM: ${API_UPSTREAM}
+      API_UPSTREAM: ${API_UPSTREAM:-http://app:8080}
     networks:
       - edge-proxy
     labels:
@@ -21,7 +21,7 @@ services:
     secrets:
       - database_password
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     ports:
       - "127.0.0.1:5432:5432"
     healthcheck:
