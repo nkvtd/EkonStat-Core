@@ -3,9 +3,10 @@
 [![Node.js](https://img.shields.io/badge/node-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/postgresql-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Docker](https://img.shields.io/badge/docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Kubernetes](https://img.shields.io/badge/kubernetes-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io/)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 
-This repository provides a single deployment that ties together [EkonStat-API](https://github.com/nkvtd/EkonStat-API) and [EkonStat-Dashboard](https://github.com/nkvtd/EkonStat-Dashboard). With a configuration file and a database password, the entire stack comes up — no local build step, no source code to mount.
+This repository provides a single home for deploying [EkonStat-API](https://github.com/nkvtd/EkonStat-API) and [EkonStat-Dashboard](https://github.com/nkvtd/EkonStat-Dashboard) — on a single machine with Docker Compose, or across a Kubernetes cluster. With a configuration file and a database password, the entire stack comes up from pre-built images on GitHub Container Registry. No local build step, no source code to mount.
 
 ## What's in the stack
 
@@ -38,7 +39,9 @@ This repository provides a single deployment that ties together [EkonStat-API](h
               Watchtower                           (watchtower profile)
 ```
 
-## Quick Start
+The same services deploy on Kubernetes as 20 manifests in `k8s/` — Deployments for the stateless workloads, StatefulSets for PostgreSQL, and Jobs for the one-shot operations. See [Kubernetes orchestration](#kubernetes-orchestration) for that side of things.
+
+## Quick Start — Docker Compose
 
 The only prerequisites are Docker and Docker Compose. Everything else is handled by the compose file.
 
@@ -142,7 +145,7 @@ If no webhook variables with a given prefix exist, dispatch is skipped for that 
 
 ### The database password stays out of `.env`
 
-The password lives in `./secrets/database_password.txt` and is mounted as a Docker secret at `/run/secrets/database_password` inside every container that needs it — `postgres`, `app`, `scheduler`, `backfiller`, and `migrate`. At startup, the API-derived containers read the secret file, construct the full `DATABASE_URL` from `POSTGRES_USER`, `POSTGRES_DB`, and the password, and export it before launching their respective `npm run` commands. The password is never written to `.env` or any environment block.
+The password lives in `./secrets/database_password.txt` and is mounted as a Docker secret at `/run/secrets/database_password` inside every container that needs it — `postgres`, `app`, `scheduler`, `backfiller`, and `migrate`. At startup, the API-derived containers read the secret file, construct the full `DATABASE_URL` from `POSTGRES_USER`, `POSTGRES_DB`, and the password, and export it before launching their respective `npm run` commands. The password is never written to `.env` or any environment block. The Kubernetes manifests follow the same pattern — a Secret resource mounted as a file, same shell script, same guarantee.
 
 ### The `edge-proxy` network
 
@@ -162,11 +165,39 @@ WATCHTOWER_NOTIFICATION_URL=telegram://token@telegram?chats=@channel-id
 
 ### Cloudflare Tunnel
 
-The tunnel creates a secure, outbound-only pipe to Cloudflare's edge — no firewall rules to manage. After [creating a tunnel](https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/) in the Cloudflare dashboard and setting the token in `.env`, start the profile:
+The tunnel creates a secure, outbound-only pipe to Cloudflare's edge — no firewall rules to manage. In the Compose setup it attaches to the `edge-proxy` network alongside the other services. In Kubernetes, the tunnel feeds traffic into an Nginx Ingress Controller that handles routing inside the cluster. After [creating a tunnel](https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/) in the Cloudflare dashboard and setting the token in `.env`:
 
 ```bash
 docker network create edge-proxy
 docker compose --profile tunnel up -d
+```
+
+## Kubernetes orchestration
+
+The `k8s/` directory holds the same stack as a set of Kubernetes manifests. Same images from GHCR, same separation of concerns — just deployed on a cluster instead of a single machine. All the cluster needs is an Nginx Ingress Controller and a default StorageClass. After that, deploying is a sequence of `kubectl apply` commands.
+
+Every component finds its natural home in a Kubernetes resource. The API server and dashboard run as Deployments — stateless, scalable horizontally with a single `kubectl scale` command. PostgreSQL lives in a StatefulSet so its data survives pod restarts, with volumes provisioned automatically per replica. Migrations and the backfiller are Jobs: they run once, finish, and stay completed, exactly like the one-shot containers in Compose under the `tools` and `backfill` profiles.
+
+The secrets and configuration follow the same principle. The database password is a Kubernetes Secret mounted as a file — never an environment variable. Every container that needs it reads from `/etc/secrets/database_password` at startup and constructs its own `DATABASE_URL` on the fly, exactly like the Docker secret. Non-sensitive values — the database user, port, API upstream address, webhook endpoints — live in a ConfigMap shared across all pods. A single `kubectl apply` updates every pod without touching individual manifests. Two probes watch the API container's health: a readiness probe at `/api/ready` that decides whether the pod receives traffic, and a liveness probe at `/api/ping` that restarts it if the process freezes.
+
+Ingress traffic flows through Cloudflare Tunnel into the cluster, where the Ingress Controller picks it up and routes `/api` to the API service and everything else to the dashboard. No firewall ports to manage — the tunnel handles the outside, the controller handles the inside.
+
+For when read load grows, a separate StatefulSet of read-only PostgreSQL replicas can be added alongside the API. Each replica bootstraps independently from the master via `pg_basebackup` and follows changes in real time. Scaling either the API or the replicas is one command.
+
+```bash
+# Deploy (requires an Nginx Ingress Controller and a default StorageClass)
+kubectl apply -f k8s/00-namespace.yaml -f k8s/01-configmap.yaml -f k8s/01-secrets.yaml
+kubectl apply -f k8s/02-postgres-configmap.yaml -f k8s/02-postgres-service.yaml -f k8s/02-postgres-statefulset.yaml
+kubectl -n ekonstat wait --for=condition=ready pod -l app=postgres --timeout=120s
+kubectl apply -f k8s/03-api-service.yaml -f k8s/03-migrate-job.yaml
+kubectl -n ekonstat wait --for=condition=complete job/migrate --timeout=120s
+kubectl apply -f k8s/03-api-deployment.yaml -f k8s/03-scheduler-deployment.yaml \
+  -f k8s/04-dashboard-service.yaml -f k8s/04-dashboard-deployment.yaml \
+  -f k8s/05-ingress.yaml -f k8s/05-cloudflared-deployment.yaml
+
+# Verify
+kubectl -n ekonstat get pods
+curl http://<ingress-ip>/api/ping
 ```
 
 ## License
