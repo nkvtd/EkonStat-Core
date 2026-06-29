@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ekonstat-config
+  namespace: ekonstat
+  labels:
+    app.kubernetes.io/part-of: ekonstat
+data:
+  POSTGRES_USER: "postgres"
+  POSTGRES_DB: "ekonstat-db"
+  PORT: "8080"
+  API_UPSTREAM: "http://api-service.ekonstat.svc.cluster.local:8080"
+  REALISED_CONTRACTS_WEBHOOK_1: ""
+  AWARDED_CONTRACTS_WEBHOOK_1: ""
+  CHANGES_IN_AWARDED_CONTRACTS_WEBHOOK_1: ""

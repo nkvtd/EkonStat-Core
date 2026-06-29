@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: ekonstat
+  labels:
+    app: migrate
+    app.kubernetes.io/part-of: ekonstat
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: migrate
+        app.kubernetes.io/part-of: ekonstat
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ghcr.io/nkvtd/ekonstat-api:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              if [ ! -f /etc/secrets/database_password ]; then
+                echo "database_password secret missing" >&2
+                exit 1
+              fi
+              DB_PASSWORD="$(cat /etc/secrets/database_password | tr -d '\r\n')"
+              export DATABASE_URL="postgresql://${POSTGRES_USER:-postgres}:${DB_PASSWORD}@postgres-0.postgres.ekonstat.svc.cluster.local:5432/${POSTGRES_DB:-ekonstat-db}"
+              exec npm run db:migrate
+          envFrom:
+            - configMapRef:
+                name: ekonstat-config
+          volumeMounts:
+            - name: secrets
+              mountPath: /etc/secrets
+              readOnly: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: secrets
+          secret:
+            secretName: ekonstat-secrets

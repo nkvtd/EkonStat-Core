@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dashboard
+  namespace: ekonstat
+  labels:
+    app: dashboard
+    app.kubernetes.io/part-of: ekonstat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dashboard
+  template:
+    metadata:
+      labels:
+        app: dashboard
+        app.kubernetes.io/part-of: ekonstat
+    spec:
+      containers:
+        - name: dashboard
+          image: ghcr.io/nkvtd/ekonstat-dashboard:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          envFrom:
+            - configMapRef:
+                name: ekonstat-config
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"

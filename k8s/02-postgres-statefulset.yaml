@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: ekonstat
+  labels:
+    app: postgres
+    app.kubernetes.io/part-of: ekonstat
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+        app.kubernetes.io/part-of: ekonstat
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:18-alpine
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - configMapRef:
+                name: ekonstat-config
+          env:
+            - name: POSTGRES_PASSWORD_FILE
+              value: /etc/secrets/database_password
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql
+            - name: secrets
+              mountPath: /etc/secrets
+              readOnly: true
+            - name: postgres-config
+              mountPath: /docker-entrypoint-initdb.d/init-replication.sql
+              subPath: init-replication.sql
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - postgres
+                - -d
+                - ekonstat-db
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: secrets
+          secret:
+            secretName: ekonstat-secrets
+        - name: postgres-config
+          configMap:
+            name: postgres-config
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+        labels:
+          app.kubernetes.io/part-of: ekonstat
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi

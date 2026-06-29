@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  namespace: ekonstat
+  labels:
+    app: scheduler
+    app.kubernetes.io/part-of: ekonstat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scheduler
+  template:
+    metadata:
+      labels:
+        app: scheduler
+        app.kubernetes.io/part-of: ekonstat
+    spec:
+      containers:
+        - name: scheduler
+          image: ghcr.io/nkvtd/ekonstat-api:latest
+          imagePullPolicy: Always
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              if [ ! -f /etc/secrets/database_password ]; then
+                echo "database_password secret missing" >&2
+                exit 1
+              fi
+              DB_PASSWORD="$(cat /etc/secrets/database_password | tr -d '\r\n')"
+              export DATABASE_URL="postgresql://${POSTGRES_USER:-postgres}:${DB_PASSWORD}@postgres-0.postgres.ekonstat.svc.cluster.local:5432/${POSTGRES_DB:-ekonstat-db}"
+              exec npm run start:scheduler
+          envFrom:
+            - configMapRef:
+                name: ekonstat-config
+          volumeMounts:
+            - name: secrets
+              mountPath: /etc/secrets
+              readOnly: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: secrets
+          secret:
+            secretName: ekonstat-secrets

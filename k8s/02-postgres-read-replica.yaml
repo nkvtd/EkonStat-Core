@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-read-service
+  namespace: ekonstat
+  labels:
+    app: postgres-read
+    app.kubernetes.io/part-of: ekonstat
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres-read
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-read
+  namespace: ekonstat
+  labels:
+    app: postgres-read
+    app.kubernetes.io/part-of: ekonstat
+spec:
+  serviceName: postgres-read
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-read
+  template:
+    metadata:
+      labels:
+        app: postgres-read
+        app.kubernetes.io/part-of: ekonstat
+    spec:
+      initContainers:
+        - name: basebackup
+          image: postgres:18-alpine
+          command:
+            - /bin/sh
+            - -c
+            - |
+              if [ -z "$(ls -A /var/lib/postgresql)" ]; then
+                echo "Bootstrapping replica from master..."
+                PGPASSWORD="$(cat /etc/secrets/database_password)" \
+                  pg_basebackup -h postgres-0.postgres.ekonstat.svc.cluster.local \
+                  -U postgres -D /var/lib/postgresql -P -R
+              else
+                echo "Data already exists — skipping basebackup"
+              fi
+          volumeMounts:
+            - name: postgres-read-data
+              mountPath: /var/lib/postgresql
+            - name: secrets
+              mountPath: /etc/secrets
+              readOnly: true
+      containers:
+        - name: postgres
+          image: postgres:18-alpine
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - configMapRef:
+                name: ekonstat-config
+          env:
+            - name: POSTGRES_PASSWORD_FILE
+              value: /etc/secrets/database_password
+          volumeMounts:
+            - name: postgres-read-data
+              mountPath: /var/lib/postgresql
+            - name: secrets
+              mountPath: /etc/secrets
+              readOnly: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - postgres
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: secrets
+          secret:
+            secretName: ekonstat-secrets
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-read-data
+        labels:
+          app.kubernetes.io/part-of: ekonstat
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 2Gi
